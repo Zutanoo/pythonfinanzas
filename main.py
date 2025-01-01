@@ -1,7 +1,7 @@
 
 usuarios = {
 "fname" : "Juan"
-"iname"  "shan"
+"iname" : "shan",
 "profesion"  "profesor"
 
 usuarios.get("fname")
