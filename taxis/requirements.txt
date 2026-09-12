@@ -1,0 +1,7 @@
+uvicorn
+fastapi
+pandas
+pydantic
+jinja2
+uuid
+weasyprint

@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Operador - Camiones PEMEX (OSM)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { font-family: 'IBM Plex Mono', monospace; margin: 0; padding: 10px 20px; background: #1e1e1e; color: #fff; }
+        h2 { margin: 0 0 10px 0; font-size: 1.5rem; }
+        #map { height: 55vh; width: 100%; border-radius: 8px; margin-bottom: 15px; z-index: 1; }
+        .controls { display: flex; gap: 20px; }
+        .panel { background: #2d2d2d; padding: 15px; border-radius: 8px; flex: 1; }
+        input, button, select { width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 15px; box-sizing: border-box; background: #3d3d3d; color: white; border: 1px solid #555; outline: none; transition: 0.3s; }
+        .input-activo { border: 2px solid #4CAF50 !important; background: #2a3a2a !important; }
+        .input-bloqueo { border: 2px solid #f44336 !important; background: #3a2a2a !important; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .input-group input { margin-bottom: 0; flex: 1; }
+        .input-group button.btn-clear { margin-bottom: 0; width: auto; background: #f44336; padding: 10px 15px; }
+        .input-group button.btn-clear:hover { background: #d32f2f; }
+        
+        /* Estilos para los letreros fijos de las sucursales */
+        .sucursal-tooltip {
+            background-color: #1e293b !important;
+            color: #38bdf8 !important;
+            border: 1px solid #38bdf8 !important;
+            font-weight: bold;
+            font-size: 11px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .sucursal-tooltip.leaflet-tooltip-top:before { 
+            border-top-color: #38bdf8 !important; 
+        }
+
+        /* Botón de despliegue para bloqueos */
+        .btn-toggle-bloqueo {
+            background-color: #d32f2f;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        .btn-toggle-bloqueo:hover { background-color: #b71c1c; }
+
+        /* Contenido oculto por defecto */
+        .collapsible-content {
+            display: none;
+            background: #252525;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px dashed #555;
+            margin-bottom: 15px;
+        }
+
+        .btn-bloquear-cuadrado {
+            width: 42px !important;
+            height: 42px !important;
+            background-color: #f44336 !important;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            margin-top: 5px;
+            margin-bottom: 5px;
+            transition: 0.2s;
+        }
+        .btn-bloquear-cuadrado:hover { background-color: #d32f2f !important; }
+
+        button { background: #4CAF50; cursor: pointer; border: none; font-weight: bold; }
+        button:hover { background: #45a049; }
+        .taxi-list { max-height: 200px; overflow-y: auto; }
+        .taxi-item { padding: 5px; border-bottom: 1px solid #444; display: flex; justify-content: space-between; align-items: center;}
+        .leaflet-tile-pane { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+    </style>
+</head>
+<body>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h2 style="margin: 0;">Control de Rutas - Hong Kong</h2>
+        
+        <a href="/descargar_reporte_pdf" target="_blank" style="background: #eab308; color: #1e1e1e; padding: 10px 20px; text-decoration: none; font-weight: bold; border-radius: 6px; transition: 0.3s; font-size: 14px; border: 2px solid #ca8a04;">
+            Reporte PDF
+        </a>
+    </div>
+    <div id="map"></div>
+
+    <div class="controls">
+
+        <!-- COLUMNA IZQUIERDA: Formulario Principal -->
+        <div class="panel" style="flex: 1;">
+            <h3>1. Asignar Nuevo Viaje</h3>
+            
+            <!-- Botón desplegable para la gestión de cierres viales -->
+            <button class="btn-toggle-bloqueo" onclick="toggleBloqueosPanel()">
+                🚧 Gestionar Calles Cerradas / Obras
+            </button>
+
+            <!-- Panel desplegable oculto inicialmente -->
+            <div id="panelBloqueos" class="collapsible-content">
+                <h4 style="margin: 0 0 10px 0; color: #ff5252;">Bloqueo de Tramo por Obra</h4>
+                
+                <label>Extremo 1 (Inicio de Calle Tapada):</label>
+                <div class="input-group">
+                    <input type="text" id="bloqueo1Input" placeholder="Clic y marca inicio en mapa..." readonly>
+                    <button class="btn-clear" onclick="clearBloqueo1()" title="Limpiar">✖</button>
+                </div>
+
+                <label>Extremo 2 (Fin de Calle Tapada):</label>
+                <div class="input-group">
+                    <input type="text" id="bloqueo2Input" placeholder="Clic y marca fin en mapa..." readonly>
+                    <button class="btn-clear" onclick="clearBloqueo2()" title="Limpiar">✖</button>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                    <button onclick="fijarBloqueoPermanente()" class="btn-bloquear-cuadrado" title="Fijar Bloqueo">🚧</button>
+                    <span style="font-size: 11px; color: #ff9800; font-weight: bold;">Clic para fijar el tramo bloqueado en el mapa.</span>
+                </div>
+                
+                <div id="bloqueosActivosBox" style="margin-top: 8px; font-size: 11px; color: #4CAF50;"></div>
+                <button onclick="limpiarBloqueosGlobales()" style="background: #d32f2f; margin-top: 8px; padding: 6px; font-size: 12px;">Borrar Todos los Bloqueos</button>
+            </div>
+
+            <label>ID del Camion:</label>
+            <select id="taxiSelect" style="margin-bottom: 15px;"></select>
+            
+            <label>Punto A (Inicio):</label>
+            <div class="input-group">
+                <input type="text" id="origenInput" placeholder="Clic aquí, luego en el mapa..." readonly>
+                <button class="btn-clear" onclick="clearOrigen()" title="Limpiar Inicio">✖</button>
+            </div>
+
+            <label>Buscar Punto B (Destino):</label>
+            <div class="input-group">
+                <input type="text" id="destInput" placeholder="Clic aquí, luego en el mapa..." class="input-activo" readonly>
+                <button class="btn-clear" onclick="clearDest()" title="Limpiar Destino">✖</button>
+            </div>
+
+            <div id="routeComparisonBox" style="margin-bottom: 15px; padding: 15px; background: #1e293b; border-radius: 8px; display: none; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 8px; margin-bottom: 10px;">
+                    <h4 style="margin: 0; color: #38bdf8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Tablero de Telemetría</h4>
+                    <span id="routeStatusBadge" style="background: #10b981; color: #fff; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold;">ÓPTIMO</span>
+                </div>
+                <div id="route1Info" style="margin-bottom: 10px; font-size: 14px; padding: 8px; background: #0f172a; border-radius: 6px; border-left: 4px solid #38bdf8;"></div>
+                <div id="route2Info" style="font-size: 13px; padding: 8px; background: #0f172a; border-radius: 6px; border-left: 4px solid #f59e0b; color: #cbd5e1;"></div>
+            </div>
+
+            <button onclick="assignTrip()">Asignar Ruta al Camion</button>
+        </div>
+
+        <!-- COLUMNA DERECHA: Agrupa Búsqueda, Activos y KPIs -->
+        <div style="flex: 2; display: flex; flex-direction: column; gap: 20px;">
+            
+            <!-- Fila Superior de la Columna Derecha -->
+            <div style="display: flex; gap: 20px;">
+                <div class="panel" style="flex: 1;">
+                    <h3>2. Buscar Camion Cercano</h3>
+                    <label>Punto A:</label>
+                    <div class="input-group">
+                        <input type="text" id="newClientInput" placeholder="Clic aquí, luego en el mapa..." readonly>
+                        <button class="btn-clear" onclick="clearClient()" title="Limpiar Cliente">✖</button>
+                    </div>
+                    <button onclick="findNearestTaxi()">Calcular Camion Más Cercano</button>
+                    <div id="resultBox" style="margin-top: 10px; color: #4CAF50; font-weight: bold;"></div>
+                </div>
+
+                <div class="panel taxi-list" style="flex: 1;">
+                    <h3>Camiones Activos</h3>
+                    <div id="activeTaxis"></div>
+                </div>
+            </div>
+
+            <!-- Fila Inferior de la Columna Derecha: Tablero de KPIs -->
+            <div class="panel" style="padding: 15px;">
+                <h3 style="margin-top: 0; margin-bottom: 15px; color: #38bdf8; font-size: 14px; text-transform: uppercase;">📊 Desempeño Operativo (Hoy)</h3>
+                <div style="display: flex; gap: 15px;">
+                    
+                    <!-- KPI 1 -->
+                    <div style="flex: 1; background: #1e293b; padding: 15px; border-radius: 8px; border-left: 4px solid #10b981; text-align: center;">
+                        <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">Utilización de Flota</div>
+                        <div id="kpi-uso" style="font-size: 24px; font-weight: bold; margin-top: 5px;">--%</div>
+                        <div id="kpi-activos" style="font-size: 11px; color: #10b981;">-- / -- en ruta</div>
+                    </div>
+                    
+                    <!-- KPI 2 -->
+                    <div style="flex: 1; background: #1e293b; padding: 15px; border-radius: 8px; border-left: 4px solid #3b82f6; text-align: center;">
+                        <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">Viajes Completados</div>
+                        <div id="kpi-viajes" style="font-size: 24px; font-weight: bold; margin-top: 5px;">--</div>
+                        <div style="font-size: 11px; color: #3b82f6;">Volumen Diario</div>
+                    </div>
+                    
+                    <!-- KPI 3 -->
+                    <div style="flex: 1; background: #1e293b; padding: 15px; border-radius: 8px; border-left: 4px solid #f59e0b; text-align: center;">
+                        <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">T. Ciclo Promedio</div>
+                        <div id="kpi-tiempo" style="font-size: 24px; font-weight: bold; margin-top: 5px;">-- min</div>
+                        <div style="font-size: 11px; color: #f59e0b;">Duración Real</div>
+                    </div>
+
+                </div>
+            </div>
+            
+        </div>
+        
+    </div>
+
+    <script>
+
+        const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjBhZjE5MTEyYWJlYzQ2ZmJiZDFhMjkwNjc0ZDk0ZDdlIiwiaCI6Im11cm11cjY0In0=";
+
+        let map;
+        let markers = [];
+        let activeDestinations = []; 
+        let highlightedMarkerIndex = null; 
+
+        let activeRouteLayers = {}; 
+        let previewRouteLayer = null; 
+
+        let bloqueosPermanentes = []; 
+        let lineasBloqueoLayers = [];
+
+        // Icono especial para las sucursales de Pemex
+        const blackIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-black.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+
+        // LISTA DE SUCURSALES FIJAS PEMEX (Coordenadas Reales)
+        const sucursalesPemex = [
+            { nombre: "Sucursal RIO", lat: 25.779350500452974, lng: -109.01469479641862 },
+            { nombre: "Sucursal PLAZA", lat: 25.790711356547035, lng: -109.01297818281196 },
+            { nombre: "Sucursal CENTRO", lat: 25.79017038807801, lng: -108.99409543313858 },
+            { nombre: "MATRIZ PRINCIPAL", lat: 25.791329603203735, lng: -108.99761449103227 },
+            { nombre: "Sucursal ROSALES", lat: 25.773708310412907, lng: -109.0128065214513 },
+            { nombre: "Sucursal MORELOS", lat: 25.785146991579264, lng: -108.98010503224424 }
+        ];
+
+        const blueIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+        const greenIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+        const redIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+        const goldIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-gold.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+        const orangeIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+        const purpleIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34] });
+
+        // Variables de estado
+        let tempDestMarker = null; let selectedDestLat = null; let selectedDestLng = null;
+        let tempOrigenMarker = null; let selectedOrigenLat = null; let selectedOrigenLng = null;
+        let tempBloqueo1Marker = null; let selectedBloqueo1Lat = null; let selectedBloqueo1Lng = null;
+        let tempBloqueo2Marker = null; let selectedBloqueo2Lat = null; let selectedBloqueo2Lng = null;
+        let tempClientMarker = null; let selectedClientLat = null; let selectedClientLng = null;
+        let activeInput = 'destInput';
+
+        function toggleBloqueosPanel() {
+            const panel = document.getElementById('panelBloqueos');
+            panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
+        }
+
+        function initMap() {
+            map = L.map('map').setView([25.7905, -108.9856], 13);
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+            sucursalesPemex.forEach(sucursal => {
+                // zIndexOffset negativo asegura que las sucursales queden al fondo y no tapen a los camiones
+                const marker = L.marker([sucursal.lat, sucursal.lng], {icon: blackIcon, zIndexOffset: -100}).addTo(map);
+                
+                // Letrero permanente visible todo el tiempo
+                marker.bindTooltip(`🏢 ${sucursal.nombre}`, {permanent: true, direction: 'top', offset: [0, -35], className: 'sucursal-tooltip'});
+
+                // Evento: Al hacerle clic, asigna esta sucursal al input seleccionado
+                marker.on('click', function() {
+                    asignarPuntoDesdeSucursal(sucursal.lat, sucursal.lng, sucursal.nombre);
+                });
+            });
+
+
+
+            // PUNTO DE ENTRADA ÚNICO AL CARGAR LA PÁGINA
+            window.onload = function() {
+                initMap();
+                loadKPIs(); // Cargar KPIs al instante de abrir el panel
+                
+                // Actualizar camiones y KPIs automáticamente cada 3 segundos
+                setInterval(() => {
+                    loadTaxis();
+                    loadKPIs(); 
+                }, 3000); 
+            };
+
+            // FUNCIÓN DE ARRANQUE CORREGIDA (Incluye KPIs)
+            window.onload = function() {
+                initMap();
+                loadKPIs(); // Cargar KPIs al instante
+                setInterval(() => {
+                    loadTaxis();
+                    loadKPIs(); // Actualizar KPIs y camiones cada 3 segundos
+                }, 3000); 
+            };
+
+            const destInput = document.getElementById('destInput');
+            const origenInput = document.getElementById('origenInput');
+            const bloqueo1Input = document.getElementById('bloqueo1Input');
+            const bloqueo2Input = document.getElementById('bloqueo2Input');
+            const newClientInput = document.getElementById('newClientInput');
+
+            function setActiveInput(id) {
+                activeInput = id;
+                destInput.classList.remove('input-activo'); 
+                origenInput.classList.remove('input-activo'); 
+                bloqueo1Input.classList.remove('input-bloqueo'); 
+                bloqueo2Input.classList.remove('input-bloqueo');
+                newClientInput.classList.remove('input-activo');
+                
+                if(id === 'bloqueo1Input' || id === 'bloqueo2Input') {
+                    document.getElementById(id).classList.add('input-bloqueo');
+                } else {
+                    document.getElementById(id).classList.add('input-activo');
+                }
+            }
+
+            destInput.addEventListener('click', () => setActiveInput('destInput'));
+            origenInput.addEventListener('click', () => setActiveInput('origenInput'));
+            bloqueo1Input.addEventListener('click', () => setActiveInput('bloqueo1Input'));
+            bloqueo2Input.addEventListener('click', () => setActiveInput('bloqueo2Input'));
+            newClientInput.addEventListener('click', () => setActiveInput('newClientInput'));
+
+            map.on('click', async function(e) {
+                const lat = e.latlng.lat; const lng = e.latlng.lng;
+                
+                // Petición a Nominatim para obtener nombre de la calle
+                let addressText = "Coordenadas seleccionadas";
+                try {
+                    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+                    const data = await response.json();
+                    if (data && data.display_name) addressText = data.display_name;
+                } catch (error) { console.warn("No se pudo obtener el nombre de la calle."); }
+                
+                if (activeInput === 'destInput') {
+                    selectedDestLat = lat; selectedDestLng = lng; destInput.value = addressText;
+                    if(tempDestMarker) map.removeLayer(tempDestMarker);
+                    tempDestMarker = L.marker([lat, lng], {icon: blueIcon}).addTo(map).bindPopup("Destino (Punto B)").openPopup();
+                } else if (activeInput === 'origenInput') {
+                    selectedOrigenLat = lat; selectedOrigenLng = lng; origenInput.value = addressText;
+                    if(tempOrigenMarker) map.removeLayer(tempOrigenMarker);
+                    tempOrigenMarker = L.marker([lat, lng], {icon: goldIcon}).addTo(map).bindPopup("Inicio (Punto A)").openPopup();
+                } else if (activeInput === 'bloqueo1Input') {
+                    selectedBloqueo1Lat = lat; selectedBloqueo1Lng = lng; bloqueo1Input.value = addressText;
+                    if(tempBloqueo1Marker) map.removeLayer(tempBloqueo1Marker);
+                    tempBloqueo1Marker = L.marker([lat, lng], {icon: orangeIcon}).addTo(map).bindPopup("Extremo 1 (Obra)").openPopup();
+                } else if (activeInput === 'bloqueo2Input') {
+                    selectedBloqueo2Lat = lat; selectedBloqueo2Lng = lng; bloqueo2Input.value = addressText;
+                    if(tempBloqueo2Marker) map.removeLayer(tempBloqueo2Marker);
+                    tempBloqueo2Marker = L.marker([lat, lng], {icon: orangeIcon}).addTo(map).bindPopup("Extremo 2 (Obra)").openPopup();
+                } else if (activeInput === 'newClientInput') {
+                    selectedClientLat = lat; selectedClientLng = lng; newClientInput.value = addressText;
+                    if(tempClientMarker) map.removeLayer(tempClientMarker);
+                    tempClientMarker = L.marker([lat, lng], {icon: redIcon}).addTo(map).bindPopup("Nuevo Cliente (Punto A)").openPopup();
+                }
+
+
+
+
+
+                drawPreviewRoute(); 
+            });
+
+            loadTaxis();
+        }
+
+
+        function fijarBloqueoPermanente() {
+            if(!selectedBloqueo1Lat || !selectedBloqueo2Lat) {
+                return alert("Selecciona primero el Extremo 1 y el Extremo 2 de la calle obstruida en el mapa.");
+            }
+
+            bloqueosPermanentes.push({
+                b1Lat: selectedBloqueo1Lat, b1Lng: selectedBloqueo1Lng,
+                b2Lat: selectedBloqueo2Lat, b2Lng: selectedBloqueo2Lng
+            });
+
+            // Resto de tu código para dibujar la línea roja...
+            const lineaRoja = L.polyline([[selectedBloqueo1Lat, selectedBloqueo1Lng], [selectedBloqueo2Lat, selectedBloqueo2Lng]], {
+                color: '#f44336', weight: 6, dashArray: '5, 10'
+            }).addTo(map).bindPopup("🚧 Tramo Bloqueado Permanentemente");
+            lineasBloqueoLayers.push(lineaRoja);
+            clearBloqueo1(); clearBloqueo2();
+            if(tempBloqueo1Marker) { map.removeLayer(tempBloqueo1Marker); tempBloqueo1Marker = null; }
+            if(tempBloqueo2Marker) { map.removeLayer(tempBloqueo2Marker); tempBloqueo2Marker = null; }
+            document.getElementById('bloqueosActivosBox').innerText = `✔ Bloqueos activos en el sistema: ${bloqueosPermanentes.length}`;
+            drawPreviewRoute();
+
+            // NUEVA LÍNEA: Guardar en el servidor
+            fetch('/api/bloqueos', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({bloqueos: bloqueosPermanentes}) });
+        }
+
+        function limpiarBloqueosGlobales() {
+            bloqueosPermanentes = [];
+            lineasBloqueoLayers.forEach(l => map.removeLayer(l));
+            lineasBloqueoLayers = [];
+            document.getElementById('bloqueosActivosBox').innerText = '';
+            drawPreviewRoute();
+            
+            // NUEVA LÍNEA: Borrar del servidor
+            fetch('/api/bloqueos', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({bloqueos: []}) });
+        }
+
+        function calcularPuntoDesvio(lat1, lon1, lat2, lon2) {
+            let midLat = (lat1 + lat2) / 2;
+            let midLon = (lon1 + lon2) / 2;
+            let dLat = lat2 - lat1;
+            let dLon = lon2 - lon1;
+            let offsetLat = -dLon * 0.006; 
+            let offsetLon = dLat * 0.006;
+            return [midLat + offsetLat, midLon + offsetLon];
+        }
+
+        // Función para autocompletar formularios usando las sucursales fijas
+        function asignarPuntoDesdeSucursal(lat, lng, nombre) {
+            const addressText = `🏢 SUCURSAL: ${nombre}`;
+            
+            if (activeInput === 'destInput') {
+                selectedDestLat = lat; selectedDestLng = lng; document.getElementById('destInput').value = addressText;
+                if(tempDestMarker) map.removeLayer(tempDestMarker);
+                tempDestMarker = L.marker([lat, lng], {icon: blueIcon}).addTo(map).bindPopup("Destino: " + nombre).openPopup();
+                
+            } else if (activeInput === 'origenInput') {
+                selectedOrigenLat = lat; selectedOrigenLng = lng; document.getElementById('origenInput').value = addressText;
+                if(tempOrigenMarker) map.removeLayer(tempOrigenMarker);
+                tempOrigenMarker = L.marker([lat, lng], {icon: goldIcon}).addTo(map).bindPopup("Inicio: " + nombre).openPopup();
+                
+            } else if (activeInput === 'newClientInput') {
+                selectedClientLat = lat; selectedClientLng = lng; document.getElementById('newClientInput').value = addressText;
+                if(tempClientMarker) map.removeLayer(tempClientMarker);
+                tempClientMarker = L.marker([lat, lng], {icon: redIcon}).addTo(map).bindPopup("Punto A: " + nombre).openPopup();
+            }
+            
+            drawPreviewRoute(); 
+        }
+
+        async function drawPreviewRoute() {
+            if(previewRouteLayer) { map.removeLayer(previewRouteLayer); previewRouteLayer = null; }
+            if(window.altRouteLayer) { map.removeLayer(window.altRouteLayer); window.altRouteLayer = null; }
+            
+            const compBox = document.getElementById('routeComparisonBox');
+            if (compBox) compBox.style.display = 'none';
+
+            if(selectedOrigenLat && selectedDestLat) {
+                try {
+                    let bodyData = {
+                        coordinates: [[selectedOrigenLng, selectedOrigenLat], [selectedDestLng, selectedDestLat]],
+                        format: "geojson" // Formato necesario para Leaflet
+                    };
+
+                    // Si hay bloqueos, creamos los polígonos de evasión para ORS
+                    if (bloqueosPermanentes.length > 0) {
+                        let avoidPolygons = [];
+                        bloqueosPermanentes.forEach(b => {
+                            let pad = 0.0004;
+                            let minLat = Math.min(b.b1Lat, b.b2Lat) - pad;
+                            let maxLat = Math.max(b.b1Lat, b.b2Lat) + pad;
+                            let minLng = Math.min(b.b1Lng, b.b2Lng) - pad;
+                            let maxLng = Math.max(b.b1Lng, b.b2Lng) + pad;
+                            
+                            avoidPolygons.push([
+                                [
+                                    [minLng, minLat],
+                                    [maxLng, minLat],
+                                    [maxLng, maxLat],
+                                    [minLng, maxLat],
+                                    [minLng, minLat]
+                                ]
+                            ]);
+                        });
+                        // Solo inyectar opciones si realmente hay polígonos
+                        bodyData.options = { avoid_polygons: { type: "MultiPolygon", coordinates: avoidPolygons } };
+                    }
+
+                    const response = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': ORS_API_KEY
+                        },
+                        body: JSON.stringify(bodyData)
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if(data.features && data.features.length > 0) {
+                        previewRouteLayer = L.geoJSON(data.features[0].geometry, { style: { color: '#38bdf8', weight: 5, dashArray: '8, 8' } }).addTo(map);
+                        
+                        let dist1 = (data.features[0].properties.summary.distance / 1000).toFixed(2);
+                        let time1 = (data.features[0].properties.summary.duration / 60).toFixed(0);
+
+                        if (compBox) {
+                            compBox.style.display = 'block';
+                            document.getElementById('route1Info').innerHTML = `<div style="color: #94a3b8; font-size: 11px; margin-bottom: 3px;">RUTA PRINCIPAL CALCULADA</div><div style="font-weight: bold; color: #fff;">Distancia: ${dist1} km &nbsp;|&nbsp; ETA: ${time1} min</div>`;
+                            
+                            if (bloqueosPermanentes.length > 0) {
+                                document.getElementById('routeStatusBadge').innerText = "CALLE EVITADA";
+                                document.getElementById('routeStatusBadge').style.background = "#f59e0b";
+                                document.getElementById('route2Info').innerHTML = `<div style="color: #94a3b8; font-size: 11px; margin-top:4px;">El sistema trazó una ruta alterna esquivando la zona de obra.</div>`;
+                            } else {
+                                document.getElementById('route2Info').innerHTML = "";
+                                document.getElementById('routeStatusBadge').innerText = "ÓPTIMO";
+                                document.getElementById('routeStatusBadge').style.background = "#10b981";
+                            }
+                        }
+                    } else if (data.error) {
+                        console.error("Error ORS:", data.error.message);
+                    }
+                } catch (e) { console.error("Error al trazar previsualización:", e); }
+            }
+        }
+
+        // 2. Reemplazar drawRealRoute (Trazado de camiones activos)
+        async function drawRealRoute(viajeId, startLat, startLng, endLat, endLng, color) {
+            activeRouteLayers[viajeId] = L.layerGroup().addTo(map); 
+            try {
+                let bodyData = { coordinates: [[startLng, startLat], [endLng, endLat]] };
+
+                if (bloqueosPermanentes.length > 0) {
+                    let avoidPolygons = [];
+                    bloqueosPermanentes.forEach(b => {
+                        let pad = 0.0004;
+                        let minLat = Math.min(b.b1Lat, b.b2Lat) - pad;
+                        let maxLat = Math.max(b.b1Lat, b.b2Lat) + pad;
+                        let minLng = Math.min(b.b1Lng, b.b2Lng) - pad;
+                        let maxLng = Math.max(b.b1Lng, b.b2Lng) + pad;
+                        avoidPolygons.push([[[minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat], [minLng, minLat]]]);
+                    });
+                    bodyData.options = { avoid_polygons: { type: "MultiPolygon", coordinates: avoidPolygons } };
+                }
+
+                const response = await fetch("https://api.openrouteservice.org/v2/directions/driving-car", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': ORS_API_KEY
+                    },
+                    body: JSON.stringify(bodyData)
+                });
+                
+                const data = await response.json();
+                
+                if(data.features && data.features.length > 0) {
+                    const routeLayer = L.geoJSON(data.features[0].geometry, { style: { color: color, weight: 5, opacity: 0.8 } });
+                    activeRouteLayers[viajeId].addLayer(routeLayer);
+                }
+            } catch (error) { console.error(error); }
+        }
+
+        // Funciones de limpieza
+        function clearOrigen() { selectedOrigenLat = null; selectedOrigenLng = null; document.getElementById('origenInput').value = ''; if(tempOrigenMarker) { map.removeLayer(tempOrigenMarker); tempOrigenMarker = null; } if(previewRouteLayer) { map.removeLayer(previewRouteLayer); previewRouteLayer = null; } }
+        function clearBloqueo1() { selectedBloqueo1Lat = null; selectedBloqueo1Lng = null; document.getElementById('bloqueo1Input').value = ''; }
+        function clearBloqueo2() { selectedBloqueo2Lat = null; selectedBloqueo2Lng = null; document.getElementById('bloqueo2Input').value = ''; }
+        function clearDest() { selectedDestLat = null; selectedDestLng = null; document.getElementById('destInput').value = ''; if(tempDestMarker) { map.removeLayer(tempDestMarker); tempDestMarker = null; } if(previewRouteLayer) { map.removeLayer(previewRouteLayer); previewRouteLayer = null; } if(window.altRouteLayer) { map.removeLayer(window.altRouteLayer); window.altRouteLayer = null; } document.getElementById('routeComparisonBox').style.display = 'none'; }
+        function clearClient() { selectedClientLat = null; selectedClientLng = null; document.getElementById('newClientInput').value = ''; if(tempClientMarker) { map.removeLayer(tempClientMarker); tempClientMarker = null; } document.getElementById('resultBox').innerHTML = ''; }
+
+        function findNearestTaxi() {
+            if (!selectedClientLat || !selectedClientLng) {
+                return alert("Selecciona el Punto A en el mapa primero.");
+            }
+            
+            let nearestTaxiId = null; let minDistance = Infinity; let nearestDest = null;
+
+            if (activeDestinations.length > 0) {
+                activeDestinations.forEach(dest => {
+                    let dist = map.distance([selectedClientLat, selectedClientLng], [dest.lat, dest.lng]);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        nearestTaxiId = dest.taxi_id;
+                        nearestDest = dest;
+                    }
+                });
+            }
+
+            if (nearestTaxiId !== null) {
+                let distKm = (minDistance / 1000).toFixed(2);
+                document.getElementById('resultBox').innerHTML = `✅ Camión ${nearestTaxiId} es el más cercano (Terminará a ${distKm} km). <br>Camión y Punto A autoseleccionados.`;
+                
+                document.getElementById('taxiSelect').value = nearestTaxiId;
+                if (nearestDest && nearestDest.markerRef) nearestDest.markerRef.openPopup();
+
+                selectedOrigenLat = selectedClientLat;
+                selectedOrigenLng = selectedClientLng;
+                document.getElementById('origenInput').value = document.getElementById('newClientInput').value;
+                
+                if(tempOrigenMarker) map.removeLayer(tempOrigenMarker);
+                tempOrigenMarker = L.marker([selectedOrigenLat, selectedOrigenLng], {icon: goldIcon}).addTo(map).bindPopup("Inicio Automático (Punto A)").openPopup();
+                
+                clearDest(); 
+                
+                // Simular clic en el input de destino para activarlo automáticamente
+                document.getElementById('destInput').click(); 
+            } else {
+                document.getElementById('resultBox').innerText = "No hay camiones en ruta para calcular proximidad.";
+            }
+        }
+
+        async function loadTaxis() {
+            try {
+                const response = await fetch('/taxis');
+                const taxis = await response.json();
+                const select = document.getElementById('taxiSelect');
+                const activeList = document.getElementById('activeTaxis');
+                const isDropdownFocused = (document.activeElement === select);
+                const valorPrevio = select.value;
+
+                if (!isDropdownFocused) select.innerHTML = ''; 
+                activeList.innerHTML = '';
+                
+                markers.forEach(m => map.removeLayer(m));
+                markers = []; activeDestinations = [];
+                let currentViajeIds = [];
+
+                taxis.forEach(t => {
+                    if (!isDropdownFocused) {
+                        let countViajes = t.viajes ? t.viajes.length : 0;
+                        let opt = document.createElement('option');
+                        opt.value = t.id;
+                        opt.innerHTML = t.status === 'Disponible' ? `Camión ${t.id} - Disponible` : `Camión ${t.id} - En Ruta (${countViajes} en cola)`;
+                        select.appendChild(opt);
+                    }
+
+                    if(t.viajes && t.viajes.length > 0) {
+                        let viajesHtml = '';
+                        t.viajes.forEach((v, index) => {
+                            const isCurrent = index === 0;
+                            viajesHtml += `<div style="font-size: 13px; margin: 5px 0; color: ${isCurrent ? '#4CAF50' : '#8b949e'};">${isCurrent ? '➤ Actual:' : '↳ En cola:'} ${v.destino_texto}</div>`;
+
+                            const iconToUse = isCurrent ? blueIcon : purpleIcon;
+                            const marker = L.marker([v.dest_lat, v.dest_lng], {icon: iconToUse}).addTo(map).bindPopup(`<b>Camión ${t.id}</b><br>${isCurrent ? 'Actual' : 'Cola'}: ${v.destino_texto}`);
+                            markers.push(marker);
+                            currentViajeIds.push(v.id);
+
+                            if (!activeRouteLayers[v.id] && v.origen_lat && v.origen_lng && v.dest_lat && v.dest_lng) {
+                                drawRealRoute(v.id, v.origen_lat, v.origen_lng, v.dest_lat, v.dest_lng, isCurrent ? '#4CAF50' : '#9c27b0');
+                            }
+                            
+                            if (index === t.viajes.length - 1) activeDestinations.push({ taxi_id: t.id, lat: v.dest_lat, lng: v.dest_lng, markerRef: marker, originalIcon: iconToUse });
+                        });
+
+                        activeList.innerHTML += `<div class="taxi-item" style="flex-direction: column; align-items: flex-start; border-bottom:1px solid #444; padding:10px 0;"><div style="font-weight:bold; color: #fff;">Camión ${t.id}</div>${viajesHtml}<div style="font-size: 11px; color: #8b949e; margin-top: 8px;">⌚ Chofer administra ruta</div></div>`;
+                    }
+                });
+                
+                for (let id in activeRouteLayers) {
+                    if (!currentViajeIds.includes(parseInt(id))) {
+                        map.removeLayer(activeRouteLayers[id]);
+                        delete activeRouteLayers[id];
+                    }
+                }
+
+                if (!isDropdownFocused && valorPrevio) select.value = valorPrevio;
+            } catch (error) {
+                console.warn("Esperando respuesta del servidor backend...", error);
+            }
+        }
+
+        async function assignTrip() {
+            const taxiId = document.getElementById('taxiSelect').value;
+            const origenTexto = document.getElementById('origenInput').value || "Ubicación actual";
+            const destinoTexto = document.getElementById('destInput').value;
+            
+            if(!taxiId || selectedDestLat === null || selectedOrigenLat === null) return alert("Por favor selecciona un Camión, un Punto A y un Punto B en el mapa.");
+
+            await fetch('/assign_trip', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    taxi_id: parseInt(taxiId), 
+                    origen_lat: selectedOrigenLat, 
+                    origen_lng: selectedOrigenLng, 
+                    dest_lat: selectedDestLat, 
+                    dest_lng: selectedDestLng, 
+                    origen_texto: origenTexto, 
+                    destino_texto: destinoTexto 
+                })
+            });
+            
+            clearOrigen(); clearDest(); clearClient(); loadTaxis(); 
+        }
+
+        window.onload = function() {
+            initMap();
+            setInterval(loadTaxis, 3000); 
+        };
+
+
+// 1. Declaramos loadKPIs globalmente
+        async function loadKPIs() {
+            try {
+                const response = await fetch('/api/kpis');
+                const data = await response.json();
+                
+                document.getElementById('kpi-uso').innerText = data.uso_flota;
+                document.getElementById('kpi-activos').innerText = `${data.activos} / ${data.total} en ruta`;
+                document.getElementById('kpi-viajes').innerText = data.viajes_hoy;
+                document.getElementById('kpi-tiempo').innerText = data.promedio_tiempo;
+            } catch (error) {
+                console.warn("Error cargando KPIs:", error);
+            }
+        }
+
+        // 2. El verdadero y único arranque del monitor
+        window.onload = function() {
+            initMap();
+            loadKPIs(); // Cargar KPIs al instante de abrir
+            
+            // Pedir al servidor los camiones y los KPIs cada 3 segundos
+            setInterval(() => {
+                loadTaxis();
+                loadKPIs(); 
+            }, 3000); 
+        };
+
+    </script>
+</body>
+</html>
